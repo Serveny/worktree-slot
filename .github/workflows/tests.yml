@@ -1,0 +1,22 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check Python syntax
+        run: python3 -m compileall -q slot.py examples/hooks tests
+      - name: Run integration tests
+        run: python3 -B -m unittest discover -s tests -v
