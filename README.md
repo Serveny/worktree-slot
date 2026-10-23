@@ -76,7 +76,7 @@ sequenceDiagram
 
 - Add scripts beside `slot.sh` in `hooks/post-claim/` or `hooks/post-finish/`.
 - Any language with a shebang; make scripts executable with `chmod +x`.
-- Run automatically in filename order; empty folders, subdirectories and non-executable files are skipped.
+- Run automatically in filename order; empty folders, subdirectories and non-executable files are skipped (Windows has no executable bit: Git Bash runs every file with a shebang).
 - Arguments: `<absolute-slot-path> <feature-branch>`. Working directory: main checkout. Output: stderr.
 - **Post-claim:** after reservation; stop on failure and keep the slot reserved.
 - **Post-finish:** after merge and release; warn on failure and continue. No hooks on discard.

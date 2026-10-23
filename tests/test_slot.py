@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import tempfile
@@ -94,16 +95,16 @@ class SlotTests(unittest.TestCase):
 
     def test_claim_hook_receives_context_and_keeps_stdout_path_only(self):
         self.install_hook("post-claim", '''[ -f "$1/.task" ]
-printf '%s\\n' "$PWD" "$1" "$2" > .worktrees/hook.log
+printf '%s\\n' "$(pwd -W 2>/dev/null || pwd)" "$1" "$2" > .worktrees/hook.log
 echo hook-output''')
         result = self.run_slot("claim", "hook-task", "fix/hook-task")
         self.assertEqual(result.returncode, 0, result.stderr)
         slot = self.root / ".worktrees/slot-1"
-        self.assertEqual(result.stdout, f"{slot}\n")
+        self.assertEqual(result.stdout, f"{slot.as_posix()}\n")
         self.assertIn("hook-output", result.stderr)
         self.assertEqual(
             (self.root / ".worktrees/hook.log").read_text().splitlines(),
-            [str(self.root), str(slot), "fix/hook-task"],
+            [self.root.as_posix(), slot.as_posix(), "fix/hook-task"],
         )
 
     def test_claim_hook_runs_again_on_reuse(self):
@@ -119,6 +120,7 @@ echo hook-output''')
             ["feat/first", "feat/second"],
         )
 
+    @unittest.skipIf(os.name == "nt", "Git Bash treats any file with a shebang as executable")
     def test_non_executable_hooks_are_skipped(self):
         self.install_hook("post-claim", "exit 99", executable=False)
         self.install_hook("post-finish", "exit 99", executable=False)
@@ -160,7 +162,7 @@ echo hook-output''')
     def test_finish_hook_runs_after_merge_and_release(self):
         self.install_hook("post-finish", '''[ ! -e "$1/.task" ]
 [ -z "$(git -C "$1" branch --show-current)" ]
-printf '%s\\n' "$PWD" "$1" "$2" > .worktrees/hook.log
+printf '%s\\n' "$(pwd -W 2>/dev/null || pwd)" "$1" "$2" > .worktrees/hook.log
 echo "Next action: load the example skill and refresh the main checkout."''')
         slot = self.claim("finish-hook")
         self.commit_feature(slot)
@@ -172,7 +174,7 @@ echo "Next action: load the example skill and refresh the main checkout."''')
         self.assertNotIn(instruction, result.stdout)
         self.assertEqual(
             (self.root / ".worktrees/hook.log").read_text().splitlines(),
-            [str(self.root), str(slot), "feat/finish-hook"],
+            [self.root.as_posix(), slot.as_posix(), "feat/finish-hook"],
         )
 
     def test_failed_finish_hook_does_not_undo_merge_or_release(self):

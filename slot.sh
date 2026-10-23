@@ -75,7 +75,7 @@ slot_dirs() {
 resolve_slot() {
   local slot="$1" d
   case "$slot" in
-    */*) d="$(abs "$slot")" || return 1 ;;
+    */* | *\\*) d="$(abs "$slot")" || return 1 ;;
     [0-9]*) d="$root/.worktrees/slot-$slot" ;;
     *) d="$root/.worktrees/$slot" ;;
   esac
