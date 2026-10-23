@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "slot.sh"
+# Resolve via PATH: on Windows a bare "bash" hits System32\bash.exe (WSL) before Git Bash.
+BASH = shutil.which("bash")
 
 
 class SlotTests(unittest.TestCase):
@@ -41,7 +43,7 @@ class SlotTests(unittest.TestCase):
 
     def run_slot(self, *args, cwd=None):
         return subprocess.run(
-            ["bash", str(self.script), *args],
+            [BASH, str(self.script), *args],
             cwd=cwd or self.root,
             text=True,
             capture_output=True,
@@ -364,7 +366,7 @@ with Path(".worktrees/hooks.log").open("a") as log:
         slot = Path(result.stdout.strip())
         result = subprocess.run(
             [
-                "bash",
+                BASH,
                 str(script),
                 "claim",
                 "nested",
