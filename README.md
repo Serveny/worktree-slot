@@ -68,7 +68,7 @@ sequenceDiagram
 
 ### Requirements
 
-- Bash with associative arrays, Git, `flock`, GNU `realpath` and `date` (as on Linux).
+- Bash 3.2+ and Git 2.31+ (for `rev-parse --path-format`). Works on Linux, macOS and Windows (Git Bash, bundled with Git for Windows).
 - Main checkout on local `main`; run the installed `slot.sh` from the repository or a slot.
 - Keep `.worktrees/`, `.task` and build caches ignored.
 

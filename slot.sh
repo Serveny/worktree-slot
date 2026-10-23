@@ -20,11 +20,35 @@ fail() {
   exit 1
 }
 
-orig_pwd="$(pwd -P)"
+# Git for Windows reports C:/x while Git Bash's pwd reports /c/x; normalize to git's form.
+if command -v cygpath >/dev/null 2>&1; then
+  native() { cygpath -m -- "$1"; }
+else
+  native() { printf '%s\n' "$1"; }
+fi
+
+abs() {
+  local p
+  p="$(cd -- "$1" 2>/dev/null && pwd -P)" || return 1
+  native "$p"
+}
+
+# mkdir is atomic on every platform; flock is missing on macOS and Git Bash.
+lock() {
+  local i=0
+  until mkdir "$root/.worktrees/.lock" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -lt 300 ] || fail "lock $root/.worktrees/.lock held for 30s; if no slot.sh is running, remove that directory"
+    sleep 0.1
+  done
+  trap 'rmdir "$root/.worktrees/.lock" 2>/dev/null' EXIT
+}
+
+orig_pwd="$(abs .)"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
-cd -- "$common_dir/.."
-root="$PWD"
+common_dir="$(abs "$(git rev-parse --path-format=absolute --git-common-dir)")"
+root="$(abs "$common_dir/..")"
+cd -- "$root"
 mkdir -p .worktrees
 shopt -s nullglob
 
@@ -51,7 +75,7 @@ slot_dirs() {
 resolve_slot() {
   local slot="$1" d
   case "$slot" in
-    */*) d="$(realpath -m -- "$slot")" ;;
+    */*) d="$(abs "$slot")" || return 1 ;;
     [0-9]*) d="$root/.worktrees/slot-$slot" ;;
     *) d="$root/.worktrees/$slot" ;;
   esac
@@ -61,11 +85,13 @@ resolve_slot() {
 }
 
 find_current_slot() {
-  local cur="$orig_pwd"
-  while [ -n "$cur" ] && [ "$cur" != "/" ]; do
+  local cur="$orig_pwd" prev=""
+  # Stop when stripping no longer changes anything ("C:" on Windows never reaches "/").
+  while [ -n "$cur" ] && [ "$cur" != "$prev" ]; do
     if [[ "${cur%/*}" = "$root/.worktrees" && "${cur##*/}" =~ ^slot-[1-9][0-9]*$ ]]; then
       [ -d "$cur" ] && printf '%s\n' "$cur" && return 0
     fi
+    prev="$cur"
     cur="${cur%/*}"
   done
   return 1
@@ -73,8 +99,8 @@ find_current_slot() {
 
 check_slot() {
   local d="$1"
-  [ "$(git -C "$d" rev-parse --show-toplevel)" = "$d" ] || fail "$d is not a worktree root"
-  [ "$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" = "$common_dir" ] || fail "$d belongs to another repository"
+  [ "$(abs "$(git -C "$d" rev-parse --show-toplevel)")" = "$d" ] || fail "$d is not a worktree root"
+  [ "$(abs "$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)")" = "$common_dir" ] || fail "$d belongs to another repository"
   [ "$(git -C "$d" symbolic-ref --quiet --short HEAD || true)" != main ] || fail "$d has main checked out"
 }
 
@@ -84,8 +110,7 @@ patch_ids() {
 }
 
 is_integrated() {
-  local d="$1" base upstream pending patch commit count=0
-  local -A integrated_patches=()
+  local d="$1" base integrated pending patch commit count=0
   reason="$d is not integrated into main"
   [ -z "$(git -C "$d" status --porcelain --untracked-files=all)" ] || {
     reason="$d has uncommitted changes; preserve and finish them before reuse"
@@ -102,22 +127,19 @@ is_integrated() {
     reason="$d has no merge base with main; review and merge its branch first"
     return 1
   }
-  upstream="$(patch_ids "$d" "$base..main")"
-  while read -r patch commit; do
-    [ -n "$patch" ] || continue
-    integrated_patches["$patch"]=1
-  done <<< "$upstream"
+  # Newline-delimited list instead of an associative array: macOS ships bash 3.2.
+  integrated=$'\n'"$(patch_ids "$d" "$base..main" | awk '{print $1}')"$'\n'
 
   local squash_patch
   squash_patch="$(git -C "$d" diff "$base" HEAD | git patch-id --verbatim | awk '{print $1}')"
-  if [ -n "$squash_patch" ] && [ -n "${integrated_patches[$squash_patch]:-}" ]; then
+  if [ -n "$squash_patch" ] && [[ "$integrated" = *$'\n'"$squash_patch"$'\n'* ]]; then
     return 0
   fi
 
   pending="$(patch_ids "$d" main..HEAD)"
   while read -r patch commit; do
     [ -n "$patch" ] || continue
-    [ -n "${integrated_patches[$patch]:-}" ] || {
+    [[ "$integrated" = *$'\n'"$patch"$'\n'* ]] || {
       reason="$d has commits not merged or cherry-picked into main: $commit"
       return 1
     }
@@ -145,8 +167,7 @@ case "$cmd" in
     branch="${2:-feat/$slug}"
     git check-ref-format --branch "$branch" >/dev/null || fail "invalid branch name: $branch"
     [[ "$branch" != main && "$branch" != slot-* && "$branch" != @* ]] || fail "choose a feature branch name: $branch"
-    exec 9>"$root/.worktrees/.claim.lock"
-    flock 9
+    lock
     git show-ref --verify --quiet refs/heads/main || fail "local main branch is missing"
     if git show-ref --verify --quiet "refs/heads/$branch"; then
       fail "branch $branch already exists; use list to find ongoing work or choose another name"
@@ -170,7 +191,7 @@ case "$cmd" in
       echo "creating $d on $branch (build cache starts cold)" >&2
       git worktree add -b "$branch" "$d" main >&2
     fi
-    printf '%s %s\n' "$slug" "$(date -Iseconds)" > "$d/.task"
+    printf '%s %s\n' "$slug" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$d/.task"
     run_hooks post-claim || fail "post-claim hook failed; $d remains claimed on $branch. Fix the failed hook and run it and the remaining hooks for this slot."
     printf '%s\n' "$d"
     ;;
@@ -189,11 +210,10 @@ case "$cmd" in
       msg="${raw_args[*]:1}"
     else
       d="$(find_current_slot)" || fail "usage: slot.sh finish [--no-squash] [slot] [message] (or run inside a slot directory)"
-      msg="${raw_args[*]}"
+      msg="${raw_args[*]-}"
     fi
 
-    exec 9>"$root/.worktrees/.claim.lock"
-    flock 9
+    lock
     [ -f "$d/.task" ] || fail "$d has no .task marker"
     check_slot "$d"
 
@@ -249,8 +269,7 @@ case "$cmd" in
     else
       d="$(find_current_slot)" || fail "usage: slot.sh discard <slot-path-or-N> (or run inside a slot directory)"
     fi
-    exec 9>"$root/.worktrees/.claim.lock"
-    flock 9
+    lock
     [ -f "$d/.task" ] || fail "$d has no .task marker"
     check_slot "$d"
 

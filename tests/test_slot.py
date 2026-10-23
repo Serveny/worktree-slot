@@ -12,7 +12,8 @@ class SlotTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="slot tests ")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name) / "repo with spaces"
+        # resolve(): macOS /var is a symlink to /private/var, and slot.sh prints physical paths.
+        self.root = Path(self.temp.name).resolve() / "repo with spaces"
         self.root.mkdir()
         self.git("init", "-b", "main")
         self.git("config", "user.name", "Slot Tests")
